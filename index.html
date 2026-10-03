@@ -185,32 +185,82 @@ body.paused #phase{ opacity:.9; }
   });
 
   /* ---------- audio ---------- */
-  var ac=null;
+  var ac=null, voices=[], lastAt={};
   function initAudio(){
+    /* must run synchronously inside a user gesture (iOS Safari) */
     try{
       var C=window.AudioContext||window.webkitAudioContext;
       if(!C) return;
       if(!ac) ac=new C();
-      if(ac.state==="suspended") ac.resume();
-    }catch(e){ ac=null; }
+      if(ac.state!=="running"&&ac.resume){ var r=ac.resume(); if(r&&r.catch) r.catch(function(){}); }
+      /* silent one-sample buffer fully unlocks output on iOS */
+      var b=ac.createBuffer(1,1,22050), s=ac.createBufferSource();
+      s.buffer=b; s.connect(ac.destination); s.start(0);
+    }catch(e){}
   }
-  function tone(freq,dur,vol){
+  /* ignore a repeat of the same sound kind within 'gap' ms (no double play) */
+  function once(kind,gap){
+    var n=Date.now();
+    if(lastAt[kind]&&n-lastAt[kind]<gap) return false;
+    lastAt[kind]=n; return true;
+  }
+  function killVoices(){
+    var t=ac?ac.currentTime:0;
+    voices.forEach(function(v){
+      try{ v.g.gain.cancelScheduledValues(t); v.g.gain.setValueAtTime(v.g.gain.value,t); v.g.gain.linearRampToValueAtTime(0.0001,t+0.03); }catch(e){}
+      try{ v.stop(t+0.05); }catch(e){}
+    });
+    voices=[];
+  }
+  function track(g,oscs,end){
+    var v={g:g,stop:function(t){ oscs.forEach(function(o){ o.stop(t); }); }};
+    voices.push(v);
+    oscs[0].onended=function(){ var i=voices.indexOf(v); if(i>=0) voices.splice(i,1); };
+  }
+  function beep(freq,dur,vol){
     if(!ac) return;
     try{
       var t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
-      o.type="sine"; o.frequency.value=freq;
+      o.type="square"; o.frequency.value=freq;
       g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime(vol,t+0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      g.gain.linearRampToValueAtTime(vol,t+0.008);
+      g.gain.setValueAtTime(vol,t+dur-0.03);
+      g.gain.linearRampToValueAtTime(0.0001,t+dur);
       o.connect(g); g.connect(ac.destination);
+      track(g,[o]);
       o.start(t); o.stop(t+dur+0.02);
     }catch(e){}
   }
+  /* long falling "fahhhh" at the end of every interval */
+  var FAHH_DUR=1.3;
+  function fahh(){
+    if(!ac) return;
+    try{
+      killVoices(); /* never stack with a previous one */
+      var t=ac.currentTime, d=FAHH_DUR;
+      var g=ac.createGain(), f=ac.createBiquadFilter();
+      var o1=ac.createOscillator(), o2=ac.createOscillator();
+      o1.type="sawtooth"; o2.type="triangle";
+      o1.frequency.setValueAtTime(440,t); o1.frequency.exponentialRampToValueAtTime(110,t+d);
+      o2.frequency.setValueAtTime(442,t); o2.frequency.exponentialRampToValueAtTime(110.5,t+d);
+      f.type="lowpass"; f.Q.value=2;
+      f.frequency.setValueAtTime(2600,t); f.frequency.exponentialRampToValueAtTime(500,t+d);
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.linearRampToValueAtTime(0.9,t+0.05);
+      g.gain.setValueAtTime(0.9,t+0.45);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+d);
+      o1.connect(f); o2.connect(f); f.connect(g); g.connect(ac.destination);
+      track(g,[o1,o2]);
+      o1.start(t); o2.start(t); o1.stop(t+d+0.05); o2.stop(t+d+0.05);
+    }catch(e){}
+  }
   function buzz(p){ if(navigator.vibrate) try{navigator.vibrate(p);}catch(e){} }
-  function tick(){ tone(880,0.07,0.35); buzz(25); }
+  function tick(){ if(once("tick",400)){ beep(880,0.14,0.4); buzz(25); } }
+  function startBeep(){ if(once("start",400)){ beep(1320,0.3,0.45); buzz([120]); } }
   function change(phase){
-    if(phase==="jump"){ tone(1318,0.35,0.6); buzz([220]); }
-    else { tone(660,0.45,0.6); buzz([120,80,120]); }
+    if(!once("change",600)) return;
+    fahh();
+    buzz(phase==="jump"?[220]:[120,80,120]);
   }
 
   /* ---------- wake lock ---------- */
@@ -272,7 +322,7 @@ body.paused #phase{ opacity:.9; }
     begin("jump",Date.now());
     elBar.style.transition="none"; elBar.style.transform="scaleX(0)";
     elCount.textContent=S.jump;
-    paintPhase(); change("jump");
+    paintPhase(); startBeep();
     wake();
     cancelAnimationFrame(raf); clearInterval(iv);
     raf=requestAnimationFrame(loop);
@@ -281,7 +331,7 @@ body.paused #phase{ opacity:.9; }
   function stop(){
     running=false; paused=false;
     cancelAnimationFrame(raf); clearInterval(iv);
-    unwake();
+    killVoices(); unwake();
     body.classList.remove("paused");
     body.setAttribute("data-view","setup");
     paintSetup();
@@ -292,7 +342,7 @@ body.paused #phase{ opacity:.9; }
     if(!paused){
       paused=true; remainingAtPause=phaseEnd-Date.now();
       body.classList.add("paused");
-      unwake();
+      killVoices(); unwake();
     }else{
       paused=false;
       var now=Date.now();
