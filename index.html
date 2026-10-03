@@ -56,15 +56,15 @@ button:focus-visible{ opacity:1 !important; text-decoration:underline; text-unde
 .view{
   position:fixed; inset:0;
   display:flex; flex-direction:column; align-items:center; justify-content:center;
-  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  padding:calc(env(safe-area-inset-top) + 8vh) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   transition:opacity .5s ease, visibility .5s;
 }
 body[data-view="setup"] #run, body[data-view="run"] #setup{ opacity:0; visibility:hidden; pointer-events:none; }
 
 /* wordmark */
 #mark{
-  position:fixed; z-index:2; top:calc(env(safe-area-inset-top) + 16px); left:50%; transform:translateX(-50%);
-  font-size:12px; line-height:1.2; font-weight:400; letter-spacing:-.02em; text-align:center;
+  position:fixed; z-index:2; top:calc(env(safe-area-inset-top) + clamp(24px,7vh,64px)); left:50%; transform:translateX(-50%);
+  font-size:22px; line-height:1.12; font-weight:400; letter-spacing:-.03em; text-align:center;
   text-transform:none; white-space:nowrap; pointer-events:none; color:var(--fg);
 }
 
@@ -130,11 +130,11 @@ body.paused #phase{ opacity:.9; }
 
 <main id="setup" class="view">
   <div class="field">
-    <div class="label">Jump</div>
+    <div class="label">Work</div>
     <div class="row">
-      <button class="step" type="button" data-k="jump" data-d="-5" aria-label="Decrease jump seconds">&minus;</button>
+      <button class="step" type="button" data-k="jump" data-d="-5" aria-label="Decrease work seconds">&minus;</button>
       <div class="num" id="jumpN" aria-live="polite">60</div>
-      <button class="step" type="button" data-k="jump" data-d="5" aria-label="Increase jump seconds">+</button>
+      <button class="step" type="button" data-k="jump" data-d="5" aria-label="Increase work seconds">+</button>
     </div>
   </div>
   <div class="field">
@@ -150,7 +150,7 @@ body.paused #phase{ opacity:.9; }
 
 <main id="run" class="view" aria-live="off">
   <div id="bar"></div>
-  <div id="phase" class="label">Jump</div>
+  <div id="phase" class="label">Work</div>
   <div id="count">60</div>
   <div id="round" class="label">Round 1</div>
   <button id="stop" type="button" class="label">Stop</button>
@@ -370,7 +370,7 @@ body.paused #phase{ opacity:.9; }
   function dur(p){ return p==="ready"?READY*1000:S[p]*1000; }
   function paintPhase(){
     body.setAttribute("data-phase",phase);
-    elPhase.textContent=paused?"Paused":(phase==="jump"?"Jump":phase==="rest"?"Rest":"Get ready");
+    elPhase.textContent=paused?"Paused":(phase==="jump"?"Work":phase==="rest"?"Rest":"Get ready");
     elRound.textContent="Round "+round;
   }
   function begin(p,startAt){
