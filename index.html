@@ -77,10 +77,17 @@ body[data-view="setup"] #run, body[data-view="run"] #setup{ opacity:0; visibilit
   font-variant-numeric:tabular-nums; letter-spacing:-.04em;
   min-width:2.1ch; text-align:center;
 }
+.num.long{ font-size:clamp(56px,20vw,128px); min-width:2.6ch; }
+.step, .sub button{ touch-action:none; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .step{
   width:64px; height:88px; font-size:30px; font-weight:200; opacity:.35;
   transition:opacity .2s;
 }
+.sub{ display:flex; align-items:center; justify-content:center; margin-top:2px; }
+.sub button{ width:56px; height:44px; font-size:20px; font-weight:200; opacity:.3; transition:opacity .2s; }
+.sub button:active{ opacity:1; }
+@media (hover:hover){ .sub button:hover{ opacity:.8; } }
+.sub .label{ font-size:10px; opacity:.4; min-width:44px; text-align:center; padding-left:.42em; }
 .step:active{ opacity:1; }
 @media (hover:hover){ .step:hover{ opacity:.8; } }
 .word{
@@ -104,7 +111,8 @@ body[data-view="run"] #theme{ display:none; }
   font-variant-numeric:tabular-nums; letter-spacing:-.05em;
   padding-right:.05em; transition:opacity .4s ease;
 }
-@media (min-aspect-ratio:1/1){ #count{ font-size:min(52vh,40vw); } }
+#count.long{ font-size:clamp(72px,36vw,300px); letter-spacing:-.06em; }
+@media (min-aspect-ratio:1/1){ #count{ font-size:min(52vh,40vw); } #count.long{ font-size:min(46vh,30vw); } }
 #round{ opacity:.4; margin-top:clamp(8px,3vh,28px); }
 #bar{
   position:fixed; left:0; right:0; top:0; height:1px;
@@ -132,17 +140,27 @@ body.paused #phase{ opacity:.9; }
   <div class="field">
     <div class="label">Work</div>
     <div class="row">
-      <button class="step" type="button" data-k="jump" data-d="-5" aria-label="Decrease work seconds">&minus;</button>
+      <button class="step" type="button" data-k="jump" data-u="m" data-d="-1" aria-label="Decrease work by one minute">&minus;</button>
       <div class="num" id="jumpN" aria-live="polite">60</div>
-      <button class="step" type="button" data-k="jump" data-d="5" aria-label="Increase work seconds">+</button>
+      <button class="step" type="button" data-k="jump" data-u="m" data-d="1" aria-label="Increase work by one minute">+</button>
+    </div>
+    <div class="sub">
+      <button type="button" data-k="jump" data-u="s" data-d="-1" aria-label="Decrease work seconds">&minus;</button>
+      <span class="label" aria-hidden="true">sec</span>
+      <button type="button" data-k="jump" data-u="s" data-d="1" aria-label="Increase work seconds">+</button>
     </div>
   </div>
   <div class="field">
     <div class="label">Rest</div>
     <div class="row">
-      <button class="step" type="button" data-k="rest" data-d="-5" aria-label="Decrease rest seconds">&minus;</button>
+      <button class="step" type="button" data-k="rest" data-u="m" data-d="-1" aria-label="Decrease rest by one minute">&minus;</button>
       <div class="num" id="restN" aria-live="polite">30</div>
-      <button class="step" type="button" data-k="rest" data-d="5" aria-label="Increase rest seconds">+</button>
+      <button class="step" type="button" data-k="rest" data-u="m" data-d="1" aria-label="Increase rest by one minute">+</button>
+    </div>
+    <div class="sub">
+      <button type="button" data-k="rest" data-u="s" data-d="-1" aria-label="Decrease rest seconds">&minus;</button>
+      <span class="label" aria-hidden="true">sec</span>
+      <button type="button" data-k="rest" data-u="s" data-d="1" aria-label="Increase rest seconds">+</button>
     </div>
   </div>
   <button id="start" class="word" type="button">Start</button>
@@ -159,7 +177,7 @@ body.paused #phase{ opacity:.9; }
 <script>
 (function(){
   "use strict";
-  var KEY="jumprope.v1", MIN=5, MAX=600, STEP=5;
+  var KEY="jumprope.v1", MIN=5, MAX=99*60, STEP=5;
   var $=function(id){return document.getElementById(id);};
   var body=document.body, root=document.documentElement;
 
@@ -187,15 +205,55 @@ body.paused #phase{ opacity:.9; }
   });
   if(mq.addEventListener) mq.addEventListener("change",paintTheme);
 
-  function paintSetup(){ $("jumpN").textContent=S.jump; $("restN").textContent=S.rest; }
-  Array.prototype.forEach.call(document.querySelectorAll(".step"),function(b){
-    b.addEventListener("click",function(){
-      var k=b.getAttribute("data-k");
-      S[k]=clamp(S[k]+(+b.getAttribute("data-d")));
-      save(); paintSetup();
-      if(navigator.vibrate) try{navigator.vibrate(8);}catch(e){}
+  function fmt(t){
+    if(t<60) return String(t);
+    var r=t%60;
+    return Math.floor(t/60)+":"+(r<10?"0":"")+r;
+  }
+  function paintSetup(){
+    [["jump","jumpN"],["rest","restN"]].forEach(function(p){
+      var el=$(p[1]), v=S[p[0]];
+      el.textContent=fmt(v); el.classList.toggle("long",v>=60);
     });
-  });
+  }
+  /* seconds step: 5s under a minute, 15s from a minute up (decreasing from exactly 1:00 goes to 0:55) */
+  function secStep(v){ return v<60?5:15; }
+  function adjust(k,unit,dir){
+    var v=S[k], n;
+    if(unit==="m") n=v+dir*60;
+    else if(dir>0){ var a=secStep(v); n=Math.floor(v/a)*a+a; }
+    else{ var b=secStep(v-1); n=Math.ceil(v/b)*b-b; }
+    n=Math.max(MIN,Math.min(MAX,n));
+    if(n===v) return false;
+    S[k]=n; save(); paintSetup();
+    if(navigator.vibrate) try{navigator.vibrate(8);}catch(e){}
+    return true;
+  }
+  /* press and hold repeats, accelerating */
+  var holdT=0, holdOwner=null;
+  function stopHold(){ clearTimeout(holdT); holdT=0; holdOwner=null; }
+  function bindStep(b){
+    var k=b.getAttribute("data-k"), u=b.getAttribute("data-u"), d=+b.getAttribute("data-d");
+    var viaPointer=false;
+    b.addEventListener("pointerdown",function(e){
+      if(e.pointerType==="mouse"&&e.button!==0) return;
+      viaPointer=true; stopHold(); holdOwner=b;
+      adjust(k,u,d);
+      var wait=420, n=0;
+      (function rep(){
+        holdT=setTimeout(function(){
+          adjust(k,u,d); n++;
+          wait=Math.max(u==="m"?60:70,wait*0.86);
+          rep();
+        },wait);
+      })();
+    });
+    ["pointerup","pointercancel","pointerleave","blur"].forEach(function(ev){ b.addEventListener(ev,function(){ if(holdOwner===b) stopHold(); }); });
+    b.addEventListener("contextmenu",function(e){ e.preventDefault(); });
+    /* keyboard activation only (pointer taps are handled above) */
+    b.addEventListener("click",function(){ if(viaPointer) viaPointer=false; else adjust(k,u,d); });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".step, .sub button"),bindStep);
 
   /* ---------- audio ----------
      Sounds are rendered once as 16-bit WAV (plain sample math) and played through
@@ -364,6 +422,7 @@ body.paused #phase{ opacity:.9; }
   var phase="jump", round=1;
   var phaseStart=0, phaseEnd=0, remainingAtPause=0, lastShown=-1;
   var raf=0, iv=0;
+  function setCount(t){ elCount.textContent=fmt(t); elCount.classList.toggle("long",t>=60); }
   var elCount=$("count"), elPhase=$("phase"), elRound=$("round"), elBar=$("bar");
 
   var READY=5; /* get ready countdown, seconds */
@@ -388,7 +447,7 @@ body.paused #phase{ opacity:.9; }
     var left=phaseEnd-now;
     var shown=Math.ceil(left/1000);
     if(shown!==lastShown){
-      elCount.textContent=shown;
+      setCount(shown);
       /* jump: ticks at 3,2,1. get ready and rest: beeps at 5,4,3,2,1 */
       var lim=phase==="jump"?3:5;
       if(!changed&&shown<=lim&&shown>=1&&lastShown>shown) tick();
@@ -396,6 +455,22 @@ body.paused #phase{ opacity:.9; }
     }
     elBar.style.transform="scaleX("+Math.min(1,(now-phaseStart)/(phaseEnd-phaseStart))+")";
   }
+  /* A Worker timer is not throttled like page timers in hidden tabs; fall back to setInterval. */
+  var worker=null;
+  function startTicker(){
+    stopTicker();
+    try{
+      var url=URL.createObjectURL(new Blob(["setInterval(function(){postMessage(0)},250)"],{type:"text/javascript"}));
+      worker=new Worker(url); URL.revokeObjectURL(url);
+      worker.onmessage=frame;
+    }catch(e){ worker=null; }
+    if(!worker) iv=setInterval(frame,250);
+  }
+  function stopTicker(){
+    if(worker){ try{worker.terminate();}catch(e){} worker=null; }
+    clearInterval(iv); iv=0;
+  }
+  document.addEventListener("visibilitychange",function(){ if(document.visibilityState==="visible") frame(); });
   function loop(){ frame(); raf=requestAnimationFrame(loop); }
 
   function start(){
@@ -405,16 +480,16 @@ body.paused #phase{ opacity:.9; }
     body.setAttribute("data-view","run");
     begin("ready",Date.now());
     elBar.style.transition="none"; elBar.style.transform="scaleX(0)";
-    elCount.textContent=READY; lastShown=READY;
+    setCount(READY); lastShown=READY;
     paintPhase(); tick(); /* beep for 5 */
     wake();
-    cancelAnimationFrame(raf); clearInterval(iv);
+    cancelAnimationFrame(raf); stopTicker();
     raf=requestAnimationFrame(loop);
-    iv=setInterval(frame,250); /* keeps ticking if rAF is throttled */
+    startTicker(); /* keeps ticking if rAF / timers are throttled in the background */
   }
   function stop(){
     running=false; paused=false;
-    cancelAnimationFrame(raf); clearInterval(iv);
+    cancelAnimationFrame(raf); stopTicker();
     stopSounds(); unwake();
     body.classList.remove("paused");
     body.setAttribute("data-view","setup");
