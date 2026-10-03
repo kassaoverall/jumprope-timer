@@ -5,14 +5,14 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Jump</title>
+<title>fah timer</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#f2f0eb" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Jump">
+<meta name="apple-mobile-web-app-title" content="fah timer">
 <link rel="icon" href="data:,">
 <style>
 :root{
@@ -26,7 +26,8 @@ html[data-theme="light"]{ --bg:#f2f0eb; --fg:#111110; }
 html[data-theme="dark"]{ --bg:#000; --fg:#f2f0eb; }
 /* running: jump is black, rest is paper */
 body[data-view="run"][data-phase="jump"]{ --bg:#000; --fg:#f2f0eb; }
-body[data-view="run"][data-phase="rest"]{ --bg:#f2f0eb; --fg:#111110; }
+body[data-view="run"][data-phase="rest"],
+body[data-view="run"][data-phase="ready"]{ --bg:#f2f0eb; --fg:#111110; }
 
 *{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
 html,body{ height:100%; }
@@ -59,6 +60,13 @@ button:focus-visible{ opacity:1 !important; text-decoration:underline; text-unde
   transition:opacity .5s ease, visibility .5s;
 }
 body[data-view="setup"] #run, body[data-view="run"] #setup{ opacity:0; visibility:hidden; pointer-events:none; }
+
+/* wordmark */
+#mark{
+  position:fixed; z-index:2; top:calc(env(safe-area-inset-top) + 16px); left:50%; transform:translateX(-50%);
+  font-size:12px; line-height:1.2; font-weight:400; letter-spacing:-.02em; text-align:center;
+  text-transform:none; white-space:nowrap; pointer-events:none; color:var(--fg);
+}
 
 /* setup */
 #setup{ gap:clamp(28px,7vh,64px); }
@@ -115,6 +123,8 @@ body.paused #phase{ opacity:.9; }
 </style>
 </head>
 <body data-view="setup" data-phase="jump">
+
+<div id="mark" aria-hidden="true">fahhhhhh<br>time</div>
 
 <button id="theme" type="button" class="label" aria-label="Toggle light or dark">Dark</button>
 
@@ -288,12 +298,13 @@ body.paused #phase{ opacity:.9; }
     }catch(e){}
   }
   /* must run synchronously inside the START / resume tap (iOS Safari) */
-  function initAudio(){
+  function initAudio(skip){
     try{ if(navigator.audioSession) navigator.audioSession.type="playback"; }catch(e){}
     ensureCtx();
     if(!audioReady) return;
-    /* "start" is excluded: it is played for real inside this same tap */
-    ["tick","fahh"].forEach(function(name){
+    /* 'skip' is a sound played for real inside this same tap */
+    ["start","tick","fahh"].forEach(function(name){
+      if(name===skip) return;
       var a=snd[name].el;
       try{
         /* a muted play inside the gesture unlocks this element for later script-started play() */
@@ -325,11 +336,12 @@ body.paused #phase{ opacity:.9; }
   }
   function buzz(p){ if(navigator.vibrate) try{navigator.vibrate(p);}catch(e){} }
   function tick(){ if(once("tick",400)){ play("tick"); buzz(25); } }
-  function startBeep(){ if(once("start",400)){ play("start"); buzz([120]); } }
+  /* entering rest: fah. entering jump (after get ready or rest): start beep. one sound only. */
   function change(phase){
     if(!once("change",600)) return;
-    stopSounds(); play("fahh");
-    buzz(phase==="jump"?[220]:[120,80,120]);
+    stopSounds();
+    if(phase==="jump"){ play("start"); buzz([220]); }
+    else{ play("fahh"); buzz([120,80,120]); }
   }
 
   /* ---------- wake lock ---------- */
@@ -354,10 +366,11 @@ body.paused #phase{ opacity:.9; }
   var raf=0, iv=0;
   var elCount=$("count"), elPhase=$("phase"), elRound=$("round"), elBar=$("bar");
 
-  function dur(p){ return S[p]*1000; }
+  var READY=5; /* get ready countdown, seconds */
+  function dur(p){ return p==="ready"?READY*1000:S[p]*1000; }
   function paintPhase(){
     body.setAttribute("data-phase",phase);
-    elPhase.textContent=paused?"Paused":(phase==="jump"?"Jump":"Rest");
+    elPhase.textContent=paused?"Paused":(phase==="jump"?"Jump":phase==="rest"?"Rest":"Get ready");
     elRound.textContent="Round "+round;
   }
   function begin(p,startAt){
@@ -368,7 +381,7 @@ body.paused #phase{ opacity:.9; }
     var now=Date.now(), changed=false;
     while(now>=phaseEnd){
       var next=phase==="jump"?"rest":"jump";
-      if(next==="jump") round++;
+      if(phase==="rest") round++;
       begin(next,phaseEnd); changed=true;
     }
     if(changed){ paintPhase(); change(phase); }
@@ -376,7 +389,9 @@ body.paused #phase{ opacity:.9; }
     var shown=Math.ceil(left/1000);
     if(shown!==lastShown){
       elCount.textContent=shown;
-      if(!changed&&shown<=3&&shown>=1&&lastShown>shown) tick();
+      /* jump: ticks at 3,2,1. get ready and rest: beeps at 5,4,3,2,1 */
+      var lim=phase==="jump"?3:5;
+      if(!changed&&shown<=lim&&shown>=1&&lastShown>shown) tick();
       lastShown=shown;
     }
     elBar.style.transform="scaleX("+Math.min(1,(now-phaseStart)/(phaseEnd-phaseStart))+")";
@@ -384,14 +399,14 @@ body.paused #phase{ opacity:.9; }
   function loop(){ frame(); raf=requestAnimationFrame(loop); }
 
   function start(){
-    initAudio();
+    initAudio("tick");
     running=true; paused=false; round=1;
     body.classList.remove("paused");
     body.setAttribute("data-view","run");
-    begin("jump",Date.now());
+    begin("ready",Date.now());
     elBar.style.transition="none"; elBar.style.transform="scaleX(0)";
-    elCount.textContent=S.jump;
-    paintPhase(); startBeep();
+    elCount.textContent=READY; lastShown=READY;
+    paintPhase(); tick(); /* beep for 5 */
     wake();
     cancelAnimationFrame(raf); clearInterval(iv);
     raf=requestAnimationFrame(loop);
