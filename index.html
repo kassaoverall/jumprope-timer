@@ -192,6 +192,11 @@ body.paused #phase{ opacity:.9; }
      HTMLAudioElements. Unlike Web Audio, media elements are NOT muted by the iOS
      silent switch. Web Audio is only a fallback if an element refuses to play. */
   var SR=44100, snd={}, ac=null, lastAt={}, audioReady=false;
+  /* Bluetooth headphones sleep their audio route and clip the first ~100-200ms of a sound.
+     So: (1) a looping near-silent track keeps the route awake while a workout runs,
+     (2) every sound starts with LEAD seconds of near-silence that BT can swallow, and
+     (3) sounds are triggered LEAD early so the audible part still lands on the second. */
+  var LEAD=0.2, LEAD_MS=LEAD*1000, QUIET=0.0015, keep=null, keepOsc=null, keepGain=null;
   try{ if(navigator.audioSession) navigator.audioSession.type="playback"; }catch(e){}
 
   function renderBeep(freq,dur,vol){
@@ -228,6 +233,18 @@ body.paused #phase{ opacity:.9; }
     for(i=0;i<n;i++){ d[i]=Math.tanh(d[i]*s*1.6)/Math.tanh(1.6)*0.98; }
     return d;
   }
+  /* LEAD seconds of near-silent noise (non-zero so the route is not idle), then the sound */
+  function withLead(d){
+    var m=Math.floor(SR*LEAD), o=new Float32Array(m+d.length), i;
+    for(i=0;i<m;i++) o[i]=(Math.random()*2-1)*QUIET;
+    o.set(d,m);
+    return o;
+  }
+  function renderKeep(){
+    var n=SR*3, d=new Float32Array(n), i;
+    for(i=0;i<n;i++) d[i]=(Math.random()*2-1)*QUIET;
+    return d;
+  }
   function wavURI(f32){
     var n=f32.length, buf=new ArrayBuffer(44+n*2), v=new DataView(buf), i;
     function s(o,str){ for(var j=0;j<str.length;j++) v.setUint8(o+j,str.charCodeAt(j)); }
@@ -247,12 +264,38 @@ body.paused #phase{ opacity:.9; }
     try{ a.load(); }catch(e){}
     snd[name]={el:a,data:data};
   }
+  /* real recorded "fah" (mp3, already has 0.2s lead-in baked in). The synthesized one is
+     rendered only if the file fails to load. */
+  function mkFile(name,url,fallback){
+    var a=new Audio(), swapped=false;
+    a.preload="auto"; a.volume=1; a.setAttribute("playsinline",""); a.setAttribute("webkit-playsinline","");
+    var entry={el:a,data:null};
+    function swap(){
+      if(swapped) return; swapped=true;
+      try{
+        entry.data=fallback();
+        a.src=wavURI(entry.data);
+        try{ a.load(); }catch(e){}
+      }catch(e){}
+    }
+    a.addEventListener("error",swap);
+    a.src=url;
+    try{ a.load(); }catch(e){}
+    snd[name]=entry;
+  }
   try{
-    mk("start",renderBeep(1320,0.3,0.95));
-    mk("tick",renderBeep(880,0.14,0.95));
-    mk("fahh",renderFahh());
+    mk("start",withLead(renderBeep(1320,0.4,0.95)));
+    mk("tick",withLead(renderBeep(880,0.25,0.95)));
+    mkFile("fahh","fah.mp3",function(){ return withLead(renderFahh()); });
     audioReady=true;
   }catch(e){}
+  try{
+    keep=new Audio();
+    keep.preload="auto"; keep.loop=true; keep.volume=1;
+    keep.setAttribute("playsinline",""); keep.setAttribute("webkit-playsinline","");
+    keep.src=wavURI(renderKeep());
+    try{ keep.load(); }catch(e){}
+  }catch(e){ keep=null; }
 
   function ensureCtx(){
     try{
@@ -265,8 +308,9 @@ body.paused #phase{ opacity:.9; }
   }
   function webAudioFallback(name){
     try{
-      var c=ensureCtx(), s=snd[name]; if(!c||!s) return;
-      var b=c.createBuffer(1,s.data.length,SR); b.getChannelData(0).set(s.data);
+      var c=ensureCtx(), s=snd[name]; if(!c||!s||!s.data) return;
+      var m=Math.floor(SR*LEAD), d=s.data.subarray(m);
+      var b=c.createBuffer(1,d.length,SR); b.getChannelData(0).set(d);
       var src=c.createBufferSource(); src.buffer=b; src.connect(c.destination); src.start(0);
     }catch(e){}
   }
@@ -297,6 +341,38 @@ body.paused #phase{ opacity:.9; }
       if(p&&p.catch) p.catch(function(){ webAudioFallback(name); });
     }catch(e){ webAudioFallback(name); }
   }
+  /* keep-alive: looping near-silent track (+ a near-silent oscillator) while a workout runs */
+  function keepStart(){
+    try{
+      if(keep){
+        var p=keep.play();
+        if(p&&p.catch) p.catch(function(){});
+      }
+    }catch(e){}
+    try{
+      var c=ensureCtx();
+      if(c&&!keepOsc){
+        keepOsc=c.createOscillator(); keepGain=c.createGain();
+        keepOsc.frequency.value=20; keepGain.gain.value=0.0005;
+        keepOsc.connect(keepGain); keepGain.connect(c.destination); keepOsc.start(0);
+      }
+    }catch(e){ keepOsc=null; keepGain=null; }
+  }
+  function keepStop(){
+    try{ if(keep){ keep.pause(); try{ keep.currentTime=0; }catch(e){} } }catch(e){}
+    try{ if(keepOsc){ keepOsc.stop(0); keepOsc.disconnect(); } if(keepGain) keepGain.disconnect(); }catch(e){}
+    keepOsc=null; keepGain=null;
+  }
+  function setMedia(state){
+    try{
+      if(!("mediaSession" in navigator)) return;
+      if(state==="none"){ navigator.mediaSession.playbackState="none"; return; }
+      if(!navigator.mediaSession.metadata && window.MediaMetadata){
+        navigator.mediaSession.metadata=new MediaMetadata({title:"Jump Rope",artist:"Interval timer"});
+      }
+      navigator.mediaSession.playbackState=state;
+    }catch(e){}
+  }
   function stopSounds(){
     Object.keys(snd).forEach(function(k){ try{ snd[k].el.pause(); snd[k].el.currentTime=0; }catch(e){} });
   }
@@ -309,9 +385,12 @@ body.paused #phase{ opacity:.9; }
   function buzz(p){ if(navigator.vibrate) try{navigator.vibrate(p);}catch(e){} }
   function tick(){ if(once("tick",400)){ play("tick"); buzz(25); } }
   function startBeep(){ if(once("start",400)){ play("start"); buzz([120]); } }
+  var preFired=false, fahhEnd=0;
+  /* the fahhhh is triggered LEAD early (see frame), so here only vibrate if it already started */
   function change(phase){
     if(!once("change",600)) return;
-    stopSounds(); play("fahh");
+    if(preFired){ preFired=false; }
+    else{ stopSounds(); if(once("fahh",600)) play("fahh"); }
     buzz(phase==="jump"?[220]:[120,80,120]);
   }
 
@@ -327,13 +406,16 @@ body.paused #phase{ opacity:.9; }
   }
   function unwake(){ try{ if(lock){ lock.release(); } }catch(e){} lock=null; }
   document.addEventListener("visibilitychange",function(){
-    if(document.visibilityState==="visible"&&running&&!paused) wake();
+    if(document.visibilityState==="visible"&&running&&!paused){
+      wake();
+      try{ if(keep&&keep.paused) keepStart(); }catch(e){}
+    }
   });
 
   /* ---------- timer ---------- */
   var running=false, paused=false;
   var phase="jump", round=1;
-  var phaseStart=0, phaseEnd=0, remainingAtPause=0, lastShown=-1;
+  var phaseStart=0, phaseEnd=0, remainingAtPause=0, lastShown=-1, lastK=-1;
   var raf=0, iv=0;
   var elCount=$("count"), elPhase=$("phase"), elRound=$("round"), elBar=$("bar");
 
@@ -344,7 +426,7 @@ body.paused #phase{ opacity:.9; }
     elRound.textContent="Round "+round;
   }
   function begin(p,startAt){
-    phase=p; phaseStart=startAt; phaseEnd=startAt+dur(p); lastShown=-1;
+    phase=p; phaseStart=startAt; phaseEnd=startAt+dur(p); lastShown=-1; lastK=-1;
   }
   function frame(){
     if(!running||paused) return;
@@ -359,8 +441,17 @@ body.paused #phase{ opacity:.9; }
     var shown=Math.ceil(left/1000);
     if(shown!==lastShown){
       elCount.textContent=shown;
-      if(!changed&&shown<=3&&shown>=1&&lastShown>shown) tick();
       lastShown=shown;
+    }
+    /* sounds are triggered LEAD early: the audible part lands exactly on the second */
+    var k=Math.ceil((left-LEAD_MS)/1000);
+    if(k!==lastK){
+      if(!changed&&k<=3&&k>=1&&lastK>k) tick();
+      lastK=k;
+    }
+    if(left<=LEAD_MS&&fahhEnd!==phaseEnd){
+      fahhEnd=phaseEnd;
+      if(once("fahh",600)){ stopSounds(); play("fahh"); preFired=true; }
     }
     elBar.style.transform="scaleX("+Math.min(1,(now-phaseStart)/(phaseEnd-phaseStart))+")";
   }
@@ -368,6 +459,8 @@ body.paused #phase{ opacity:.9; }
 
   function start(){
     initAudio();
+    preFired=false; fahhEnd=0;
+    keepStart(); setMedia("playing");
     running=true; paused=false; round=1;
     body.classList.remove("paused");
     body.setAttribute("data-view","run");
@@ -383,7 +476,7 @@ body.paused #phase{ opacity:.9; }
   function stop(){
     running=false; paused=false;
     cancelAnimationFrame(raf); clearInterval(iv);
-    stopSounds(); unwake();
+    stopSounds(); keepStop(); setMedia("none"); preFired=false; fahhEnd=0; unwake();
     body.classList.remove("paused");
     body.setAttribute("data-view","setup");
     paintSetup();
@@ -394,9 +487,10 @@ body.paused #phase{ opacity:.9; }
     if(!paused){
       paused=true; remainingAtPause=phaseEnd-Date.now();
       body.classList.add("paused");
-      stopSounds(); unwake();
+      stopSounds(); keepStop(); setMedia("paused"); preFired=false; unwake();
     }else{
       paused=false;
+      keepStart(); setMedia("playing");
       var now=Date.now();
       phaseEnd=now+remainingAtPause; phaseStart=phaseEnd-dur(phase);
       body.classList.remove("paused");
@@ -405,6 +499,12 @@ body.paused #phase{ opacity:.9; }
     paintPhase();
   }
 
+  try{
+    if("mediaSession" in navigator){
+      navigator.mediaSession.setActionHandler("play",function(){ if(running&&paused) toggle(); });
+      navigator.mediaSession.setActionHandler("pause",function(){ if(running&&!paused) toggle(); });
+    }
+  }catch(e){}
   $("start").addEventListener("click",start);
   $("stop").addEventListener("click",function(e){ e.stopPropagation(); stop(); });
   $("run").addEventListener("click",toggle);
