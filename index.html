@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Jump</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#f2f0eb" media="(prefers-color-scheme: light)">
@@ -184,19 +187,118 @@ body.paused #phase{ opacity:.9; }
     });
   });
 
-  /* ---------- audio ---------- */
-  var ac=null, voices=[], lastAt={};
-  function initAudio(){
-    /* must run synchronously inside a user gesture (iOS Safari) */
+  /* ---------- audio ----------
+     Sounds are rendered once as 16-bit WAV (plain sample math) and played through
+     HTMLAudioElements. Unlike Web Audio, media elements are NOT muted by the iOS
+     silent switch. Web Audio is only a fallback if an element refuses to play. */
+  var SR=44100, snd={}, ac=null, lastAt={}, audioReady=false;
+  try{ if(navigator.audioSession) navigator.audioSession.type="playback"; }catch(e){}
+
+  function renderBeep(freq,dur,vol){
+    var n=Math.floor(SR*dur), d=new Float32Array(n), ph=0, i, t, g;
+    for(i=0;i<n;i++){
+      t=i/SR;
+      g=t<0.006?t/0.006:(t>dur-0.03?Math.max(0,(dur-t)/0.03):1);
+      ph+=freq/SR; ph-=Math.floor(ph);
+      d[i]=(ph<0.5?1:-1)*vol*g;
+    }
+    return d;
+  }
+  /* falling "fahhhh": saw + triangle sweeping 440Hz to 110Hz through a sweeping low-pass */
+  function renderFahh(){
+    var dur=1.3, n=Math.floor(SR*(dur+0.05)), d=new Float32Array(n), i, t, k, peak=0;
+    var p1=0, p2=0, x1=0, x2=0, y1=0, y2=0, b0=0, b1=0, b2=0, a1=0, a2=0, Q=2;
+    for(i=0;i<n;i++){
+      t=Math.min(i/SR,dur); k=t/dur;
+      var f1=440*Math.pow(110/440,k), f2=442*Math.pow(110.5/442,k);
+      p1+=f1/SR; p1-=Math.floor(p1); p2+=f2/SR; p2-=Math.floor(p2);
+      var x=(2*p1-1)+(Math.abs(4*p2-2)-1);
+      if(i%16===0){
+        var fc=2600*Math.pow(500/2600,k), w=2*Math.PI*fc/SR, al=Math.sin(w)/(2*Q), c=Math.cos(w), a0=1+al;
+        b0=(1-c)/2/a0; b1=(1-c)/a0; b2=b0; a1=-2*c/a0; a2=(1-al)/a0;
+      }
+      var y=b0*x+b1*x1+b2*x2-a1*y1-a2*y2;
+      x2=x1; x1=x; y2=y1; y1=y;
+      var g=t<0.05?t/0.05:(t<0.45?1:Math.pow(0.0001,(t-0.45)/(dur-0.45)));
+      if(i>=SR*dur) g=0;
+      d[i]=y*g; if(Math.abs(d[i])>peak) peak=Math.abs(d[i]);
+    }
+    /* normalise hard, then soft-clip a touch for extra loudness */
+    var s=0.97/(peak||1);
+    for(i=0;i<n;i++){ d[i]=Math.tanh(d[i]*s*1.6)/Math.tanh(1.6)*0.98; }
+    return d;
+  }
+  function wavURI(f32){
+    var n=f32.length, buf=new ArrayBuffer(44+n*2), v=new DataView(buf), i;
+    function s(o,str){ for(var j=0;j<str.length;j++) v.setUint8(o+j,str.charCodeAt(j)); }
+    s(0,"RIFF"); v.setUint32(4,36+n*2,true); s(8,"WAVE"); s(12,"fmt ");
+    v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+    v.setUint32(24,SR,true); v.setUint32(28,SR*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+    s(36,"data"); v.setUint32(40,n*2,true);
+    for(i=0;i<n;i++){ var x=Math.max(-1,Math.min(1,f32[i])); v.setInt16(44+i*2,x<0?x*32768:x*32767,true); }
+    var bytes=new Uint8Array(buf), bin="";
+    for(i=0;i<bytes.length;i+=8192) bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
+    return "data:audio/wav;base64,"+btoa(bin);
+  }
+  function mk(name,data){
+    var a=new Audio();
+    a.preload="auto"; a.volume=1; a.setAttribute("playsinline",""); a.setAttribute("webkit-playsinline","");
+    a.src=wavURI(data);
+    try{ a.load(); }catch(e){}
+    snd[name]={el:a,data:data};
+  }
+  try{
+    mk("start",renderBeep(1320,0.3,0.95));
+    mk("tick",renderBeep(880,0.14,0.95));
+    mk("fahh",renderFahh());
+    audioReady=true;
+  }catch(e){}
+
+  function ensureCtx(){
     try{
       var C=window.AudioContext||window.webkitAudioContext;
-      if(!C) return;
+      if(!C) return null;
       if(!ac) ac=new C();
       if(ac.state!=="running"&&ac.resume){ var r=ac.resume(); if(r&&r.catch) r.catch(function(){}); }
-      /* silent one-sample buffer fully unlocks output on iOS */
-      var b=ac.createBuffer(1,1,22050), s=ac.createBufferSource();
-      s.buffer=b; s.connect(ac.destination); s.start(0);
+      return ac;
+    }catch(e){ return null; }
+  }
+  function webAudioFallback(name){
+    try{
+      var c=ensureCtx(), s=snd[name]; if(!c||!s) return;
+      var b=c.createBuffer(1,s.data.length,SR); b.getChannelData(0).set(s.data);
+      var src=c.createBufferSource(); src.buffer=b; src.connect(c.destination); src.start(0);
     }catch(e){}
+  }
+  /* must run synchronously inside the START / resume tap (iOS Safari) */
+  function initAudio(){
+    try{ if(navigator.audioSession) navigator.audioSession.type="playback"; }catch(e){}
+    ensureCtx();
+    if(!audioReady) return;
+    /* "start" is excluded: it is played for real inside this same tap */
+    ["tick","fahh"].forEach(function(name){
+      var a=snd[name].el;
+      try{
+        /* a muted play inside the gesture unlocks this element for later script-started play() */
+        a.muted=true;
+        var p=a.play();
+        var done=function(){ try{ a.pause(); a.currentTime=0; }catch(e){} a.muted=false; };
+        if(p&&p.then) p.then(done,function(){ a.muted=false; }); else done();
+      }catch(e){ a.muted=false; }
+    });
+  }
+  function play(name){
+    var s=snd[name]; if(!s){ return; }
+    var a=s.el;
+    try{
+      a.muted=false; a.volume=1;
+      try{ a.currentTime=0; }catch(e){}
+      var p=a.play();
+      if(p&&p.catch) p.catch(function(){ webAudioFallback(name); });
+    }catch(e){ webAudioFallback(name); }
+  }
+  function stopSounds(){
+    Object.keys(snd).forEach(function(k){ try{ snd[k].el.pause(); snd[k].el.currentTime=0; }catch(e){} });
   }
   /* ignore a repeat of the same sound kind within 'gap' ms (no double play) */
   function once(kind,gap){
@@ -204,62 +306,12 @@ body.paused #phase{ opacity:.9; }
     if(lastAt[kind]&&n-lastAt[kind]<gap) return false;
     lastAt[kind]=n; return true;
   }
-  function killVoices(){
-    var t=ac?ac.currentTime:0;
-    voices.forEach(function(v){
-      try{ v.g.gain.cancelScheduledValues(t); v.g.gain.setValueAtTime(v.g.gain.value,t); v.g.gain.linearRampToValueAtTime(0.0001,t+0.03); }catch(e){}
-      try{ v.stop(t+0.05); }catch(e){}
-    });
-    voices=[];
-  }
-  function track(g,oscs,end){
-    var v={g:g,stop:function(t){ oscs.forEach(function(o){ o.stop(t); }); }};
-    voices.push(v);
-    oscs[0].onended=function(){ var i=voices.indexOf(v); if(i>=0) voices.splice(i,1); };
-  }
-  function beep(freq,dur,vol){
-    if(!ac) return;
-    try{
-      var t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
-      o.type="square"; o.frequency.value=freq;
-      g.gain.setValueAtTime(0.0001,t);
-      g.gain.linearRampToValueAtTime(vol,t+0.008);
-      g.gain.setValueAtTime(vol,t+dur-0.03);
-      g.gain.linearRampToValueAtTime(0.0001,t+dur);
-      o.connect(g); g.connect(ac.destination);
-      track(g,[o]);
-      o.start(t); o.stop(t+dur+0.02);
-    }catch(e){}
-  }
-  /* long falling "fahhhh" at the end of every interval */
-  var FAHH_DUR=1.3;
-  function fahh(){
-    if(!ac) return;
-    try{
-      killVoices(); /* never stack with a previous one */
-      var t=ac.currentTime, d=FAHH_DUR;
-      var g=ac.createGain(), f=ac.createBiquadFilter();
-      var o1=ac.createOscillator(), o2=ac.createOscillator();
-      o1.type="sawtooth"; o2.type="triangle";
-      o1.frequency.setValueAtTime(440,t); o1.frequency.exponentialRampToValueAtTime(110,t+d);
-      o2.frequency.setValueAtTime(442,t); o2.frequency.exponentialRampToValueAtTime(110.5,t+d);
-      f.type="lowpass"; f.Q.value=2;
-      f.frequency.setValueAtTime(2600,t); f.frequency.exponentialRampToValueAtTime(500,t+d);
-      g.gain.setValueAtTime(0.0001,t);
-      g.gain.linearRampToValueAtTime(0.9,t+0.05);
-      g.gain.setValueAtTime(0.9,t+0.45);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+d);
-      o1.connect(f); o2.connect(f); f.connect(g); g.connect(ac.destination);
-      track(g,[o1,o2]);
-      o1.start(t); o2.start(t); o1.stop(t+d+0.05); o2.stop(t+d+0.05);
-    }catch(e){}
-  }
   function buzz(p){ if(navigator.vibrate) try{navigator.vibrate(p);}catch(e){} }
-  function tick(){ if(once("tick",400)){ beep(880,0.14,0.4); buzz(25); } }
-  function startBeep(){ if(once("start",400)){ beep(1320,0.3,0.45); buzz([120]); } }
+  function tick(){ if(once("tick",400)){ play("tick"); buzz(25); } }
+  function startBeep(){ if(once("start",400)){ play("start"); buzz([120]); } }
   function change(phase){
     if(!once("change",600)) return;
-    fahh();
+    stopSounds(); play("fahh");
     buzz(phase==="jump"?[220]:[120,80,120]);
   }
 
@@ -331,7 +383,7 @@ body.paused #phase{ opacity:.9; }
   function stop(){
     running=false; paused=false;
     cancelAnimationFrame(raf); clearInterval(iv);
-    killVoices(); unwake();
+    stopSounds(); unwake();
     body.classList.remove("paused");
     body.setAttribute("data-view","setup");
     paintSetup();
@@ -342,7 +394,7 @@ body.paused #phase{ opacity:.9; }
     if(!paused){
       paused=true; remainingAtPause=phaseEnd-Date.now();
       body.classList.add("paused");
-      killVoices(); unwake();
+      stopSounds(); unwake();
     }else{
       paused=false;
       var now=Date.now();
