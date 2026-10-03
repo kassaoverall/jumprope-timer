@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jump</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#f2f0eb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jump">
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --paper:#f2f0eb; --ink:#111110;
+  --bg:var(--paper); --fg:var(--ink);
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#000; --fg:#f2f0eb; }
+}
+html[data-theme="light"]{ --bg:#f2f0eb; --fg:#111110; }
+html[data-theme="dark"]{ --bg:#000; --fg:#f2f0eb; }
+/* running: jump is black, rest is paper */
+body[data-view="run"][data-phase="jump"]{ --bg:#000; --fg:#f2f0eb; }
+body[data-view="run"][data-phase="rest"]{ --bg:#f2f0eb; --fg:#111110; }
+
+*{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+html,body{ height:100%; }
+html{ background:var(--bg); transition:background-color .9s ease; }
+body{
+  background:var(--bg); color:var(--fg);
+  transition:background-color .9s ease, color .9s ease;
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-weight:300;
+  -webkit-font-smoothing:antialiased;
+  min-height:100vh; min-height:100dvh;
+  overflow:hidden; user-select:none; -webkit-user-select:none;
+  overscroll-behavior:none; touch-action:manipulation;
+}
+button{
+  font:inherit; color:inherit; background:none; border:0; border-radius:0;
+  cursor:pointer; letter-spacing:inherit; text-transform:inherit;
+  outline:none;
+}
+button:focus-visible{ opacity:1 !important; text-decoration:underline; text-underline-offset:.5em; }
+
+.label{
+  font-size:11px; font-weight:400; letter-spacing:.42em; text-transform:uppercase;
+  padding-left:.42em; /* optically recentre tracked text */
+}
+.view{
+  position:fixed; inset:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  transition:opacity .5s ease, visibility .5s;
+}
+body[data-view="setup"] #run, body[data-view="run"] #setup{ opacity:0; visibility:hidden; pointer-events:none; }
+
+/* setup */
+#setup{ gap:clamp(28px,7vh,64px); }
+.field{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+.row{ display:flex; align-items:center; justify-content:center; }
+.num{
+  font-size:clamp(88px,30vw,200px); line-height:1; font-weight:200;
+  font-variant-numeric:tabular-nums; letter-spacing:-.04em;
+  min-width:2.1ch; text-align:center;
+}
+.step{
+  width:64px; height:88px; font-size:30px; font-weight:200; opacity:.35;
+  transition:opacity .2s;
+}
+.step:active{ opacity:1; }
+@media (hover:hover){ .step:hover{ opacity:.8; } }
+.word{
+  font-size:13px; font-weight:400; letter-spacing:.5em; text-transform:uppercase;
+  padding:22px 0 22px .5em; min-width:160px;
+}
+#start{ margin-top:clamp(0px,2vh,16px); }
+#theme{
+  position:fixed; top:calc(env(safe-area-inset-top) + 14px); right:calc(env(safe-area-inset-right) + 8px);
+  font-size:10px; letter-spacing:.38em; padding:14px 12px 14px 20px; opacity:.3;
+  transition:opacity .2s;
+}
+@media (hover:hover){ #theme:hover{ opacity:.8; } }
+body[data-view="run"] #theme{ display:none; }
+
+/* run */
+#run{ cursor:pointer; gap:clamp(8px,2vh,20px); }
+#phase{ opacity:.55; }
+#count{
+  font-size:clamp(120px,52vw,420px); line-height:.9; font-weight:100;
+  font-variant-numeric:tabular-nums; letter-spacing:-.05em;
+  padding-right:.05em; transition:opacity .4s ease;
+}
+@media (min-aspect-ratio:1/1){ #count{ font-size:min(52vh,40vw); } }
+#round{ opacity:.4; margin-top:clamp(8px,3vh,28px); }
+#bar{
+  position:fixed; left:0; right:0; top:0; height:1px;
+  margin-top:env(safe-area-inset-top);
+  background:var(--fg); opacity:.7; transform-origin:0 50%; transform:scaleX(0);
+}
+#stop{
+  position:fixed; bottom:calc(env(safe-area-inset-bottom) + 22px); left:50%; transform:translateX(-50%);
+  font-size:11px; font-weight:400; letter-spacing:.42em; padding:20px 24px 20px calc(24px + .42em);
+  opacity:.35; transition:opacity .2s;
+}
+@media (hover:hover){ #stop:hover{ opacity:.9; } }
+body.paused #count{ opacity:.25; }
+body.paused #phase{ opacity:.9; }
+@media (prefers-reduced-motion:reduce){ html,body,.view{ transition:none; } }
+</style>
+</head>
+<body data-view="setup" data-phase="jump">
+
+<button id="theme" type="button" class="label" aria-label="Toggle light or dark">Dark</button>
+
+<main id="setup" class="view">
+  <div class="field">
+    <div class="label">Jump</div>
+    <div class="row">
+      <button class="step" type="button" data-k="jump" data-d="-5" aria-label="Decrease jump seconds">&minus;</button>
+      <div class="num" id="jumpN" aria-live="polite">60</div>
+      <button class="step" type="button" data-k="jump" data-d="5" aria-label="Increase jump seconds">+</button>
+    </div>
+  </div>
+  <div class="field">
+    <div class="label">Rest</div>
+    <div class="row">
+      <button class="step" type="button" data-k="rest" data-d="-5" aria-label="Decrease rest seconds">&minus;</button>
+      <div class="num" id="restN" aria-live="polite">30</div>
+      <button class="step" type="button" data-k="rest" data-d="5" aria-label="Increase rest seconds">+</button>
+    </div>
+  </div>
+  <button id="start" class="word" type="button">Start</button>
+</main>
+
+<main id="run" class="view" aria-live="off">
+  <div id="bar"></div>
+  <div id="phase" class="label">Jump</div>
+  <div id="count">60</div>
+  <div id="round" class="label">Round 1</div>
+  <button id="stop" type="button" class="label">Stop</button>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var KEY="jumprope.v1", MIN=5, MAX=600, STEP=5;
+  var $=function(id){return document.getElementById(id);};
+  var body=document.body, root=document.documentElement;
+
+  /* ---------- settings ---------- */
+  var S={jump:60,rest:30,theme:null};
+  try{
+    var raw=JSON.parse(localStorage.getItem(KEY)||"null");
+    if(raw){
+      if(isFinite(raw.jump)) S.jump=clamp(+raw.jump);
+      if(isFinite(raw.rest)) S.rest=clamp(+raw.rest);
+      if(raw.theme==="light"||raw.theme==="dark") S.theme=raw.theme;
+    }
+  }catch(e){}
+  function clamp(v){ v=Math.round(v/STEP)*STEP; return Math.max(MIN,Math.min(MAX,v)); }
+  function save(){ try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){} }
+
+  var mq=window.matchMedia("(prefers-color-scheme: dark)");
+  function isDark(){ return S.theme?S.theme==="dark":mq.matches; }
+  function paintTheme(){
+    if(S.theme) root.setAttribute("data-theme",S.theme); else root.removeAttribute("data-theme");
+    $("theme").textContent=isDark()?"Light":"Dark";
+  }
+  $("theme").addEventListener("click",function(){
+    S.theme=isDark()?"light":"dark"; save(); paintTheme();
+  });
+  if(mq.addEventListener) mq.addEventListener("change",paintTheme);
+
+  function paintSetup(){ $("jumpN").textContent=S.jump; $("restN").textContent=S.rest; }
+  Array.prototype.forEach.call(document.querySelectorAll(".step"),function(b){
+    b.addEventListener("click",function(){
+      var k=b.getAttribute("data-k");
+      S[k]=clamp(S[k]+(+b.getAttribute("data-d")));
+      save(); paintSetup();
+      if(navigator.vibrate) try{navigator.vibrate(8);}catch(e){}
+    });
+  });
+
+  /* ---------- audio ---------- */
+  var ac=null;
+  function initAudio(){
+    try{
+      var C=window.AudioContext||window.webkitAudioContext;
+      if(!C) return;
+      if(!ac) ac=new C();
+      if(ac.state==="suspended") ac.resume();
+    }catch(e){ ac=null; }
+  }
+  function tone(freq,dur,vol){
+    if(!ac) return;
+    try{
+      var t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
+      o.type="sine"; o.frequency.value=freq;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(vol,t+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      o.connect(g); g.connect(ac.destination);
+      o.start(t); o.stop(t+dur+0.02);
+    }catch(e){}
+  }
+  function buzz(p){ if(navigator.vibrate) try{navigator.vibrate(p);}catch(e){} }
+  function tick(){ tone(880,0.07,0.35); buzz(25); }
+  function change(phase){
+    if(phase==="jump"){ tone(1318,0.35,0.6); buzz([220]); }
+    else { tone(660,0.45,0.6); buzz([120,80,120]); }
+  }
+
+  /* ---------- wake lock ---------- */
+  var lock=null;
+  function wake(){
+    try{
+      if(!("wakeLock" in navigator)||lock) return;
+      navigator.wakeLock.request("screen").then(function(l){
+        lock=l; l.addEventListener("release",function(){ lock=null; });
+      }).catch(function(){});
+    }catch(e){}
+  }
+  function unwake(){ try{ if(lock){ lock.release(); } }catch(e){} lock=null; }
+  document.addEventListener("visibilitychange",function(){
+    if(document.visibilityState==="visible"&&running&&!paused) wake();
+  });
+
+  /* ---------- timer ---------- */
+  var running=false, paused=false;
+  var phase="jump", round=1;
+  var phaseStart=0, phaseEnd=0, remainingAtPause=0, lastShown=-1;
+  var raf=0, iv=0;
+  var elCount=$("count"), elPhase=$("phase"), elRound=$("round"), elBar=$("bar");
+
+  function dur(p){ return S[p]*1000; }
+  function paintPhase(){
+    body.setAttribute("data-phase",phase);
+    elPhase.textContent=paused?"Paused":(phase==="jump"?"Jump":"Rest");
+    elRound.textContent="Round "+round;
+  }
+  function begin(p,startAt){
+    phase=p; phaseStart=startAt; phaseEnd=startAt+dur(p); lastShown=-1;
+  }
+  function frame(){
+    if(!running||paused) return;
+    var now=Date.now(), changed=false;
+    while(now>=phaseEnd){
+      var next=phase==="jump"?"rest":"jump";
+      if(next==="jump") round++;
+      begin(next,phaseEnd); changed=true;
+    }
+    if(changed){ paintPhase(); change(phase); }
+    var left=phaseEnd-now;
+    var shown=Math.ceil(left/1000);
+    if(shown!==lastShown){
+      elCount.textContent=shown;
+      if(!changed&&shown<=3&&shown>=1&&lastShown>shown) tick();
+      lastShown=shown;
+    }
+    elBar.style.transform="scaleX("+Math.min(1,(now-phaseStart)/(phaseEnd-phaseStart))+")";
+  }
+  function loop(){ frame(); raf=requestAnimationFrame(loop); }
+
+  function start(){
+    initAudio();
+    running=true; paused=false; round=1;
+    body.classList.remove("paused");
+    body.setAttribute("data-view","run");
+    begin("jump",Date.now());
+    elBar.style.transition="none"; elBar.style.transform="scaleX(0)";
+    elCount.textContent=S.jump;
+    paintPhase(); change("jump");
+    wake();
+    cancelAnimationFrame(raf); clearInterval(iv);
+    raf=requestAnimationFrame(loop);
+    iv=setInterval(frame,250); /* keeps ticking if rAF is throttled */
+  }
+  function stop(){
+    running=false; paused=false;
+    cancelAnimationFrame(raf); clearInterval(iv);
+    unwake();
+    body.classList.remove("paused");
+    body.setAttribute("data-view","setup");
+    paintSetup();
+  }
+  function toggle(){
+    if(!running) return;
+    initAudio();
+    if(!paused){
+      paused=true; remainingAtPause=phaseEnd-Date.now();
+      body.classList.add("paused");
+      unwake();
+    }else{
+      paused=false;
+      var now=Date.now();
+      phaseEnd=now+remainingAtPause; phaseStart=phaseEnd-dur(phase);
+      body.classList.remove("paused");
+      wake();
+    }
+    paintPhase();
+  }
+
+  $("start").addEventListener("click",start);
+  $("stop").addEventListener("click",function(e){ e.stopPropagation(); stop(); });
+  $("run").addEventListener("click",toggle);
+  document.addEventListener("keydown",function(e){
+    if(e.key===" "||e.code==="Space"){
+      if(running){ e.preventDefault(); toggle(); }
+      else if(document.activeElement===document.body){ e.preventDefault(); start(); }
+    }else if(e.key==="Escape"&&running) stop();
+  });
+
+  paintTheme(); paintSetup();
+  /* test hook (harmless) */
+  window.__jr={state:function(){return {running:running,paused:paused,phase:phase,round:round};}};
+})();
+</script>
+</body>
+</html>
